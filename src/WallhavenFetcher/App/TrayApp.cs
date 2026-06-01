@@ -24,9 +24,9 @@ public sealed class TrayApp : ApplicationContext
     private readonly SaveBanEngine _saveBan;
     private readonly ImportEngine _importer;
     private readonly PresetEngine _presets;
+    private readonly FitFolderEngine _fitFolder;
 
     private ToolStripMenuItem? _updateMenuItem;
-    private ToolStripMenuItem? _presetsMenuItem;
     private string? _pendingInstallerUrl;
     private Version? _pendingVersion;
 
@@ -47,6 +47,7 @@ public sealed class TrayApp : ApplicationContext
         _saveBan         = new SaveBanEngine(AppendLog);
         _importer        = new ImportEngine(AppendLog);
         _presets         = new PresetEngine(_registry);
+        _fitFolder       = new FitFolderEngine(AppendLog);
 
         _menu = BuildMenu();
         _tray = new NotifyIcon
@@ -90,6 +91,9 @@ public sealed class TrayApp : ApplicationContext
 
     private ContextMenuStrip BuildMenu()
     {
+        // Slim menu: just the four hot actions + Settings + Quit.
+        // Imports, presets, library, open-folder/log, knobs — all moved into
+        // the unified Settings window.
         var m = new ContextMenuStrip();
 
         _updateMenuItem = new ToolStripMenuItem("⬇  Update available…", null, (_, _) => InstallUpdate())
@@ -99,57 +103,15 @@ public sealed class TrayApp : ApplicationContext
         m.Items.Add(_updateMenuItem);
         m.Items.Add(new ToolStripSeparator());
 
-        m.Items.Add("🔄  Sync now",                null, (_, _) => RunSyncAsync());
-        m.Items.Add("♥  Save current wallpaper",   null, (_, _) => SaveCurrent());
-        m.Items.Add("🗑  Ban current wallpaper",   null, (_, _) => BanCurrent());
+        m.Items.Add("♥  Save current wallpaper",  null, (_, _) => SaveCurrent());
+        m.Items.Add("🗑  Ban current wallpaper",  null, (_, _) => BanCurrent());
+        m.Items.Add("🔄  Sync now",               null, (_, _) => RunSyncAsync());
+        m.Items.Add("✨  Fix existing wallpapers", null, (_, _) => FitFolderInBackground());
         m.Items.Add(new ToolStripSeparator());
-
-        m.Items.Add("⬇  Import file(s)…",          null, (_, _) => ImportFiles());
-        m.Items.Add("📁  Import folder…",           null, (_, _) => ImportFolder());
+        m.Items.Add("⚙  Settings…",                null, (_, _) => OpenSettings());
         m.Items.Add(new ToolStripSeparator());
-
-        m.Items.Add("⚙  Settings…",                 null, (_, _) => OpenSettings());
-
-        _presetsMenuItem = new ToolStripMenuItem("★  Presets");
-        m.Items.Add(_presetsMenuItem);
-        RebuildPresetsSubmenu();
-
-        m.Items.Add(new ToolStripSeparator());
-
-        m.Items.Add("📂  Open wallpaper folder",    null, (_, _) => OpenFolder());
-        m.Items.Add("📄  Open log",                  null, (_, _) => OpenLog());
-        m.Items.Add(new ToolStripSeparator());
-        m.Items.Add("Quit",                          null, (_, _) => ExitApp());
+        m.Items.Add("Quit",                        null, (_, _) => ExitApp());
         return m;
-    }
-
-    private void RebuildPresetsSubmenu()
-    {
-        if (_presetsMenuItem is null) return;
-        _presetsMenuItem.DropDownItems.Clear();
-
-        _presetsMenuItem.DropDownItems.Add("🔗  Create from URL…", null, (_, _) => OpenPresetUrl());
-        _presetsMenuItem.DropDownItems.Add("💾  Save current as preset…", null, (_, _) => SaveCurrentAsPreset());
-        _presetsMenuItem.DropDownItems.Add(new ToolStripSeparator());
-
-        var cfgFile = ConfigFile.Load(Paths.ConfigFile);
-        var presets = cfgFile.Presets;
-        if (presets.Count == 0)
-        {
-            _presetsMenuItem.DropDownItems.Add(new ToolStripMenuItem("(no presets yet)") { Enabled = false });
-            return;
-        }
-
-        var apply = new ToolStripMenuItem("Apply");
-        var delete = new ToolStripMenuItem("Delete");
-        foreach (var name in presets.Keys.OrderBy(s => s, StringComparer.OrdinalIgnoreCase))
-        {
-            var n = name;
-            apply.DropDownItems.Add(n, null, (_, _) => ApplyPreset(n));
-            delete.DropDownItems.Add(n, null, (_, _) => DeletePreset(n));
-        }
-        _presetsMenuItem.DropDownItems.Add(apply);
-        _presetsMenuItem.DropDownItems.Add(delete);
     }
 
     // ─── Actions ─────────────────────────────────────────────────────────
@@ -212,150 +174,33 @@ public sealed class TrayApp : ApplicationContext
                 string.Join(", ", result.NewlyBanned.Select(c => c.ToString())));
     }
 
-    private async void ImportFiles()
-    {
-        using var dlg = new OpenFileDialog
-        {
-            Title = "Pick image file(s) to import",
-            Filter = "Images|*.jpg;*.jpeg;*.png;*.webp;*.gif;*.bmp;*.tiff;*.tif|All files|*.*",
-            Multiselect = true,
-        };
-        if (dlg.ShowDialog() != DialogResult.OK) return;
-        await DoImportAsync(dlg.FileNames);
-    }
-
-    private async void ImportFolder()
-    {
-        using var dlg = new FolderBrowserDialog
-        {
-            Description = "Pick folder to import images from (walks recursively)",
-            UseDescriptionForTitle = true,
-        };
-        if (dlg.ShowDialog() != DialogResult.OK) return;
-        if (string.IsNullOrEmpty(dlg.SelectedPath)) return;
-        await DoImportAsync(new[] { dlg.SelectedPath });
-    }
-
-    private async Task DoImportAsync(IEnumerable<string> paths)
-    {
-        try
-        {
-            var cfgFile = ConfigFile.Load(Paths.ConfigFile);
-            var cfg     = cfgFile.MaterializeEffective();
-            var state   = State.Load(Paths.StateFile);
-            var result  = await _importer.ImportAsync(paths, state, cfg);
-
-            if (result.NoneFound)
-                _notifier.Show("Wallhaven Fetcher — Import", "No importable files found.");
-            else if (result.Imported.Count > 0)
-                _notifier.Show("Wallhaven Fetcher — Imported",
-                    $"{result.Imported.Count} file(s) imported");
-            else if (result.AlreadyImported.Count > 0)
-                _notifier.Show("Wallhaven Fetcher — Import",
-                    $"{result.AlreadyImported.Count} already in collection.");
-        }
-        catch (Exception ex)
-        {
-            AppendLog($"Import failed: {ex}");
-            _notifier.Show("Wallhaven Fetcher — Import failed", ex.Message);
-        }
-    }
-
     private void OpenSettings()
     {
         var cfg = ConfigFile.Load(Paths.ConfigFile);
-        using var form = new SettingsForm(cfg);
+        using var form = new SettingsForm(cfg, _presets, _importer, _saveBan, _fitFolder, _notifier.Show);
         if (form.ShowDialog() == DialogResult.OK)
         {
             _notifier.Show("Wallhaven Fetcher", "Settings saved. Syncing…");
             RunSyncAsync();
-            BeginInvokeOnMenu(RebuildPresetsSubmenu);
         }
     }
 
-    private async void OpenPresetUrl()
+    private async void FitFolderInBackground()
     {
-        using var form = new PresetUrlForm();
-        if (form.ShowDialog() != DialogResult.OK) return;
-        if (string.IsNullOrEmpty(form.PresetName) || string.IsNullOrEmpty(form.Url))
+        try
         {
-            _notifier.Show("Wallhaven Fetcher", "Name and URL are required.");
-            return;
+            var cfg = ConfigFile.Load(Paths.ConfigFile).MaterializeEffective();
+            _notifier.Show("Wallhaven Fetcher", "Fitting existing wallpapers…");
+            var result = await _fitFolder.RunAsync(cfg);
+            _notifier.Show("Wallhaven Fetcher — Fit complete", result.Summary());
         }
-
-        var cfg = ConfigFile.Load(Paths.ConfigFile);
-        var source = _presets.CreateFromUrl(form.PresetName, form.Url, cfg);
-        if (source is null)
+        catch (Exception ex)
         {
-            _notifier.Show("Wallhaven Fetcher — URL not recognized",
-                "Couldn't match URL to any registered source (wallhaven / konachan).");
-            return;
+            AppendLog($"Fit folder failed: {ex}");
+            _notifier.Show("Wallhaven Fetcher — Fit failed", ex.Message);
         }
-
-        _presets.Apply(form.PresetName, cfg);
-        _notifier.Show("Wallhaven — Preset applied",
-            $"'{form.PresetName}' [{source}] — syncing…");
-
-        BeginInvokeOnMenu(RebuildPresetsSubmenu);
-        await Task.Run(RunSyncAsync);
     }
 
-    private void SaveCurrentAsPreset()
-    {
-        var input = PromptText("Save current settings as preset:", "Preset name:");
-        if (string.IsNullOrWhiteSpace(input)) return;
-
-        var cfg = ConfigFile.Load(Paths.ConfigFile);
-        _presets.SaveCurrent(input, cfg);
-        _notifier.Show("Wallhaven Fetcher", $"Saved preset: {input}");
-        BeginInvokeOnMenu(RebuildPresetsSubmenu);
-    }
-
-    private void ApplyPreset(string name)
-    {
-        var cfg = ConfigFile.Load(Paths.ConfigFile);
-        if (!_presets.Apply(name, cfg))
-        {
-            _notifier.Show("Wallhaven Fetcher", $"Unknown preset: {name}");
-            return;
-        }
-        _notifier.Show("Wallhaven — Preset", $"Applied: {name} — syncing…");
-        BeginInvokeOnMenu(RebuildPresetsSubmenu);
-        RunSyncAsync();
-    }
-
-    private void DeletePreset(string name)
-    {
-        var cfg = ConfigFile.Load(Paths.ConfigFile);
-        if (_presets.Delete(name, cfg))
-            _notifier.Show("Wallhaven Fetcher", $"Deleted preset: {name}");
-        BeginInvokeOnMenu(RebuildPresetsSubmenu);
-    }
-
-    private void OpenFolder()
-    {
-        var folder = ConfigFile.Load(Paths.ConfigFile).MaterializeEffective().ResolveFolder();
-        Directory.CreateDirectory(folder);
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName        = folder,
-            UseShellExecute = true,
-        });
-    }
-
-    private void OpenLog()
-    {
-        if (!File.Exists(_logPath))
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(_logPath)!);
-            File.WriteAllText(_logPath, "");
-        }
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName        = _logPath,
-            UseShellExecute = true,
-        });
-    }
 
     private async void InstallUpdate()
     {
@@ -373,26 +218,6 @@ public sealed class TrayApp : ApplicationContext
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────
-
-    private static string? PromptText(string prompt, string title)
-    {
-        using var f = new Form
-        {
-            Text = title,
-            Width = 420,
-            Height = 160,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            StartPosition = FormStartPosition.CenterScreen,
-            MaximizeBox = false, MinimizeBox = false,
-        };
-        var lbl = new Label { Text = prompt, Bounds = new Rectangle(12, 12, 380, 20) };
-        var txt = new TextBox { Bounds = new Rectangle(12, 40, 380, 24) };
-        var ok = new Button { Text = "OK",     DialogResult = DialogResult.OK,     Bounds = new Rectangle(232, 80, 80, 28) };
-        var cn = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Bounds = new Rectangle(316, 80, 76, 28) };
-        f.Controls.AddRange(new Control[] { lbl, txt, ok, cn });
-        f.AcceptButton = ok; f.CancelButton = cn;
-        return f.ShowDialog() == DialogResult.OK ? txt.Text.Trim() : null;
-    }
 
     private void AppendLog(string message)
     {
