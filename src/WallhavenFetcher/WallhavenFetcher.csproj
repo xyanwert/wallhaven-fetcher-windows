@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>WallhavenFetcher</RootNamespace>
+    <AssemblyName>WallhavenFetcher</AssemblyName>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <Company>xyanwert</Company>
+    <Product>Wallhaven Fetcher</Product>
+    <Description>Daily wallpaper sync from wallhaven.cc and konachan.com — Windows tray app.</Description>
+    <Copyright>Personal use</Copyright>
+    <ApplicationIcon>Resources\tray-icon.ico</ApplicationIcon>
+
+    <!-- Self-contained single-file publish for end users:
+         dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Image processing: pure-C# replacement for ImageMagick. -->
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.5" />
+
+    <!-- Native Windows 10/11 toast notifications. -->
+    <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
+
+    <!-- Convenience: rich JSON config (already in System.Text.Json, but this gives us source generators). -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Resources\tray-icon.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

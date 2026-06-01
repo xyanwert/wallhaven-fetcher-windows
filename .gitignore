@@ -1,0 +1,49 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+out/
+publish/
+
+# Visual Studio / Rider / IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vsconfig
+
+# Test results
+TestResults/
+[Cc]overage*/
+*.coverage
+*.coveragexml
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+
+# macOS / Windows noise
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# Installer build artifacts
+installer/Output/
+installer/*.exe
+
+# Secrets — never commit API keys or signing certs
+*.pfx
+*.snk
+api_key
+.env
+appsettings.local.json
+local.settings.json
+
+# Logs
+*.log
