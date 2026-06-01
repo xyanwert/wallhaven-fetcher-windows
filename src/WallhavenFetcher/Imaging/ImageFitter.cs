@@ -98,6 +98,8 @@ public sealed class ImageFitter
         CancellationToken ct)
     {
         // Background: blur at target resolution (small, fast), then upscale to canvas.
+        // ImageMagick's `-blur 0x12` ≈ Gaussian sigma 4 (sigma = radius / 3).
+        // Visual result matches the macOS version's padded-bg look.
         using var bg = original.Clone(x => x
             .Resize(new ResizeOptions
             {
@@ -105,7 +107,7 @@ public sealed class ImageFitter
                 Mode = ResizeMode.Crop,
                 Position = AnchorPositionMode.Center,
             })
-            .GaussianBlur(12f)
+            .GaussianBlur(4f)
             .Resize(canvasW, canvasH));
 
         // Composite original at native size, centered.
