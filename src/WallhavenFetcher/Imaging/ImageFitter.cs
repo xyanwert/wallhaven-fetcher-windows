@@ -1,7 +1,11 @@
 using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Drawing.Processing;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+// Aliases so we don't collide with System.Drawing.Point / Size / Rectangle
+// (brought in by ImplicitUsings + UseWindowsForms).
+using ImgPoint     = SixLabors.ImageSharp.Point;
+using ImgSize      = SixLabors.ImageSharp.Size;
+using ImgRectangle = SixLabors.ImageSharp.Rectangle;
 
 namespace WallhavenFetcher.Imaging;
 
@@ -71,7 +75,7 @@ public sealed class ImageFitter
             {
                 // CROP path
                 img.Mutate(x => x
-                    .Crop(new Rectangle((iw - cropW) / 2, (ih - cropH) / 2, cropW, cropH)));
+                    .Crop(new ImgRectangle((iw - cropW) / 2, (ih - cropH) / 2, cropW, cropH)));
                 await img.SaveAsync(path, ct);
                 return (true, $"{iw}x{ih} → {cropW}x{cropH} (cropped {cropLoss * 100:F1}% off-axis)");
             }
@@ -103,7 +107,7 @@ public sealed class ImageFitter
         using var bg = original.Clone(x => x
             .Resize(new ResizeOptions
             {
-                Size = new Size(_targetW, _targetH),
+                Size = new ImgSize(_targetW, _targetH),
                 Mode = ResizeMode.Crop,
                 Position = AnchorPositionMode.Center,
             })
@@ -113,7 +117,7 @@ public sealed class ImageFitter
         // Composite original at native size, centered.
         int offsetX = (canvasW - original.Width) / 2;
         int offsetY = (canvasH - original.Height) / 2;
-        bg.Mutate(x => x.DrawImage(original, new Point(offsetX, offsetY), 1.0f));
+        bg.Mutate(x => x.DrawImage(original, new ImgPoint(offsetX, offsetY), 1.0f));
 
         await bg.SaveAsync(destPath, ct);
     }
