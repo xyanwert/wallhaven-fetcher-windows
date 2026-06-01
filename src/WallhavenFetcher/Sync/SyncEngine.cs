@@ -24,8 +24,16 @@ public sealed class SyncEngine
         _notify = notify;
     }
 
-    public async Task<SyncResult> RunAsync(Config cfg, State state, CancellationToken ct = default)
+    public async Task<SyncResult> RunAsync(Config cfg, State state,
+                                            bool force = false,
+                                            CancellationToken ct = default)
     {
+        if (cfg.Frozen && !force)
+        {
+            _log("Sync is frozen — skipping (this run is automatic; use 'Sync now' to override)");
+            return new SyncResult(0, 0, "frozen");
+        }
+
         var src = _registry.Get(cfg.Source);
         var folder = cfg.ResolveFolder();
         Directory.CreateDirectory(folder);

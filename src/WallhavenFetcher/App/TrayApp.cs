@@ -63,11 +63,11 @@ public sealed class TrayApp : ApplicationContext
         {
             Interval = (int)TimeSpan.FromHours(SyncIntervalHours).TotalMilliseconds,
         };
-        _syncTimer.Tick += (_, _) => RunSyncAsync();
+        _syncTimer.Tick += (_, _) => RunSyncAsync(force: false);
         _syncTimer.Start();
 
         // First-run sync after a short delay so the tray icon appears first.
-        _ = Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(_ => RunSyncAsync());
+        _ = Task.Delay(TimeSpan.FromSeconds(3)).ContinueWith(_ => RunSyncAsync(force: false));
 
         // Background update check.
         _ = _updater.CheckAsync((ver, url) =>
@@ -89,9 +89,11 @@ public sealed class TrayApp : ApplicationContext
 
     // ─── Menu construction ───────────────────────────────────────────────
 
+    private ToolStripMenuItem? _freezeMenuItem;
+
     private ContextMenuStrip BuildMenu()
     {
-        // Slim menu: just the four hot actions + Settings + Quit.
+        // Slim menu: just the four hot actions + freeze + Settings + Quit.
         // Imports, presets, library, open-folder/log, knobs — all moved into
         // the unified Settings window.
         var m = new ContextMenuStrip();
@@ -105,18 +107,51 @@ public sealed class TrayApp : ApplicationContext
 
         m.Items.Add("♥  Save current wallpaper",  null, (_, _) => SaveCurrent());
         m.Items.Add("🗑  Ban current wallpaper",  null, (_, _) => BanCurrent());
-        m.Items.Add("🔄  Sync now",               null, (_, _) => RunSyncAsync());
+        m.Items.Add("🔄  Sync now",               null, (_, _) => RunSyncAsync(force: true));
         m.Items.Add("✨  Fix existing wallpapers", null, (_, _) => FitFolderInBackground());
         m.Items.Add(new ToolStripSeparator());
+
+        _freezeMenuItem = new ToolStripMenuItem("❄  Freeze sync", null, (_, _) => ToggleFreeze());
+        m.Items.Add(_freezeMenuItem);
         m.Items.Add("⚙  Settings…",                null, (_, _) => OpenSettings());
         m.Items.Add(new ToolStripSeparator());
         m.Items.Add("Quit",                        null, (_, _) => ExitApp());
+
+        UpdateFreezeMenu();
         return m;
+    }
+
+    private void UpdateFreezeMenu()
+    {
+        var cfg = ConfigFile.Load(Paths.ConfigFile).MaterializeEffective();
+        if (_freezeMenuItem is not null)
+        {
+            _freezeMenuItem.Text = cfg.Frozen
+                ? "▶  Unfreeze sync"
+                : "❄  Freeze sync";
+        }
+        if (_tray is not null)
+        {
+            _tray.Text = cfg.Frozen
+                ? "Wallhaven Fetcher (frozen)"
+                : "Wallhaven Fetcher";
+        }
+    }
+
+    private void ToggleFreeze()
+    {
+        var cfgFile = ConfigFile.Load(Paths.ConfigFile);
+        var current = cfgFile.MaterializeEffective().Frozen;
+        cfgFile.Overrides["frozen"] = System.Text.Json.JsonSerializer.SerializeToElement(!current);
+        cfgFile.Save(Paths.ConfigFile);
+        _notifier.Show("Wallhaven Fetcher",
+            !current ? "Sync frozen — automatic syncs paused" : "Sync resumed");
+        UpdateFreezeMenu();
     }
 
     // ─── Actions ─────────────────────────────────────────────────────────
 
-    private async void RunSyncAsync()
+    private async void RunSyncAsync(bool force = false)
     {
         try
         {
@@ -125,8 +160,17 @@ public sealed class TrayApp : ApplicationContext
             var state = State.Load(Paths.StateFile);
 
             var engine = new SyncEngine(_http, _registry, AppendLog, _notifier.Show);
-            await engine.RunAsync(cfg, state);
-            WallpaperRefresher.Refresh();
+            var result = await engine.RunAsync(cfg, state, force: force);
+            if (result.Mode == "frozen" && !force)
+            {
+                // Silent — already logged. We surface a small notice when the
+                // user clicks Sync now while frozen and DIDN'T pass force.
+                // (Currently impossible since Sync now always passes force=true.)
+            }
+            else
+            {
+                WallpaperRefresher.Refresh();
+            }
         }
         catch (Exception ex)
         {

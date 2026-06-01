@@ -46,6 +46,10 @@ public sealed class Config
     public int FitTolerancePct { get; set; } = 12;
     public int CropThresholdPct { get; set; } = 10;
 
+    // When true, the periodic sync timer no-ops. Explicit "Sync now" still
+    // runs (it calls RunAsync(force: true) — see TrayApp.SyncNow).
+    public bool Frozen { get; set; } = false;
+
     /// <summary>Resolve folder path, defaulting to %USERPROFILE%\Pictures\Wallhaven.</summary>
     public string ResolveFolder()
     {
