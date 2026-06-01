@@ -1,8 +1,10 @@
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
-// Aliases so we don't collide with System.Drawing.Point / Size / Rectangle
-// (brought in by ImplicitUsings + UseWindowsForms).
+// Aliases so we don't collide with System.Drawing.* (brought in globally by
+// ImplicitUsings + UseWindowsForms). The generic Image<T> is unique to
+// SixLabors so it doesn't need aliasing — only the non-generic factories do.
+using ImgImage     = SixLabors.ImageSharp.Image;
 using ImgPoint     = SixLabors.ImageSharp.Point;
 using ImgSize      = SixLabors.ImageSharp.Size;
 using ImgRectangle = SixLabors.ImageSharp.Rectangle;
@@ -43,7 +45,7 @@ public sealed class ImageFitter
     {
         try
         {
-            using var img = await Image.LoadAsync<Rgba32>(path, ct);
+            using var img = await ImgImage.LoadAsync<Rgba32>(path, ct);
             int iw = img.Width;
             int ih = img.Height;
 

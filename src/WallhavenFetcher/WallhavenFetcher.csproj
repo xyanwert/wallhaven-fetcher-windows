@@ -2,7 +2,11 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- net8.0-windows10.0.17763.0 = Win10 1809 SDK baseline; required for
+         Microsoft.Toolkit.Uwp.Notifications' ToastContentBuilder.Show()
+         extension (it's conditionally compiled per Windows SDK target). -->
+    <TargetFramework>net8.0-windows10.0.17763.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>WallhavenFetcher</RootNamespace>
     <AssemblyName>WallhavenFetcher</AssemblyName>
