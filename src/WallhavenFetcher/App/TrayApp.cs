@@ -1,4 +1,5 @@
 using System.Net.Http;
+using WallhavenFetcher.Imaging;
 using WallhavenFetcher.Notifications;
 using WallhavenFetcher.Sync;
 using WallhavenFetcher.Updater;
