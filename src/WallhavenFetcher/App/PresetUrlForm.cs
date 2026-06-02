@@ -1,11 +1,13 @@
 using System.Text.RegularExpressions;
+using System.Web;
 
 namespace WallhavenFetcher.App;
 
 /// <summary>
 /// Prompt the user for preset name + URL + optional rollout %. The URL gets
 /// an &amp;rollout=N param appended (replacing any existing one) if the
-/// dropdown picks a value other than "(don't override)".
+/// dropdown picks a value other than "(don't override)". Also auto-fills
+/// the preset name from the URL's q/tag text as you type.
 /// </summary>
 public sealed class PresetUrlForm : Form
 {
@@ -15,6 +17,11 @@ public sealed class PresetUrlForm : Form
     private readonly TextBox  _name    = new();
     private readonly TextBox  _url     = new();
     private readonly ComboBox _rollout = new();
+
+    // Tracks the most recent auto-suggested name so we know whether the
+    // current value in _name was user-typed or auto-filled. We only
+    // overwrite when it still matches what we suggested (or it's empty).
+    private string _lastAutoSuggested = "";
 
     private sealed record RolloutChoice(string Label, int? Value)
     {
@@ -46,6 +53,7 @@ public sealed class PresetUrlForm : Form
 
         Controls.Add(new Label { Text = "URL:", Bounds = new Rectangle(16, 106, 100, 20) });
         _url.Bounds = new Rectangle(120, 104, 450, 24);
+        _url.TextChanged += (_, _) => MaybeAutoSuggestName();
         Controls.Add(_url);
 
         Controls.Add(new Label { Text = "Rollout %:", Bounds = new Rectangle(16, 142, 100, 20) });
@@ -100,5 +108,64 @@ public sealed class PresetUrlForm : Form
         url = Regex.Replace(url, @"[?&]rollout=\d+", "");
         url += (url.Contains('?') ? "&" : "?") + "rollout=" + rollout.Value;
         return url;
+    }
+
+    /// <summary>
+    /// Watch the URL field. If the user hasn't typed a custom name, derive
+    /// a name from the URL's q (wallhaven) or free-text tags (konachan).
+    /// </summary>
+    private void MaybeAutoSuggestName()
+    {
+        var current = _name.Text.Trim();
+        // Only overwrite if the field is empty or still holds our last suggestion.
+        if (!string.IsNullOrEmpty(current) && current != _lastAutoSuggested)
+            return;
+
+        var suggested = ExtractPresetNameFromUrl(_url.Text.Trim());
+        if (!string.IsNullOrEmpty(suggested))
+        {
+            _name.Text = suggested;
+            _lastAutoSuggested = suggested;
+        }
+        else if (!string.IsNullOrEmpty(_lastAutoSuggested) && current == _lastAutoSuggested)
+        {
+            // URL was cleared / no extractable text — clear the auto-suggestion too.
+            _name.Text = "";
+            _lastAutoSuggested = "";
+        }
+    }
+
+    private static string ExtractPresetNameFromUrl(string urlString)
+    {
+        if (string.IsNullOrWhiteSpace(urlString)) return "";
+        if (!Uri.TryCreate(urlString, UriKind.Absolute, out var url)) return "";
+        var qs = HttpUtility.ParseQueryString(url.Query);
+
+        if (url.Host.Contains("wallhaven", StringComparison.OrdinalIgnoreCase))
+            return SanitizeName(qs["q"] ?? "");
+
+        if (url.Host.Contains("konachan", StringComparison.OrdinalIgnoreCase))
+        {
+            // Konachan packs everything into tags="..." — strip the prefixed
+            // tokens (rating:, order:, width:>=, ratio:, etc.) and keep just
+            // the free-text portion as the preset-name source.
+            var tags = qs["tags"] ?? "";
+            var freeText = string.Join(" ",
+                tags.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Where(t => !t.Contains(':')));
+            return SanitizeName(freeText);
+        }
+
+        return "";
+    }
+
+    private static string SanitizeName(string s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return "";
+        s = s.ToLowerInvariant();
+        s = Regex.Replace(s, @"[+\s]+", "-");       // spaces and pluses → dash
+        s = Regex.Replace(s, @"[^a-z0-9-]", "");    // strip everything else
+        s = Regex.Replace(s, @"-+", "-");           // collapse runs of dashes
+        return s.Trim('-');
     }
 }
