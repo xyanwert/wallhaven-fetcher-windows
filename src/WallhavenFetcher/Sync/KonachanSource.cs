@@ -82,37 +82,78 @@ public sealed class KonachanSource : ISource
         return $"{ApiBase}?{qs}";
     }
 
+    /// <summary>Logger for parse diagnostics — set by SyncEngine before calling ParseResponse.</summary>
+    public Action<string>? Log { get; set; }
+
     public IReadOnlyList<Candidate> ParseResponse(string jsonBody)
     {
-        // Konachan returns a top-level JSON array
         using var doc = JsonDocument.Parse(jsonBody);
-        if (doc.RootElement.ValueKind != JsonValueKind.Array) return Array.Empty<Candidate>();
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            Log?.Invoke($"[konachan.parse] root is not an array — kind: {doc.RootElement.ValueKind}");
+            return Array.Empty<Candidate>();
+        }
 
-        var list = new List<Candidate>(doc.RootElement.GetArrayLength());
+        int rawCount = doc.RootElement.GetArrayLength();
+        var list = new List<Candidate>(rawCount);
+        int rejectedNoUrl = 0, rejectedNoId = 0, rejectedException = 0;
+
         foreach (var p in doc.RootElement.EnumerateArray())
         {
-            var url = p.TryGetProperty("file_url", out var fu) ? fu.GetString() ?? "" : "";
-            if (string.IsNullOrEmpty(url)) continue;
-
-            var ext = p.TryGetProperty("file_ext", out var fe) ? fe.GetString() ?? "" : "";
-            if (!string.IsNullOrEmpty(ext) && !ext.StartsWith('.')) ext = "." + ext;
-            if (string.IsNullOrEmpty(ext))
+            try
             {
-                try { ext = Path.GetExtension(new Uri(url).AbsolutePath); }
-                catch { }
+                var url = p.TryGetProperty("file_url", out var fu) ? fu.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(url)) { rejectedNoUrl++; continue; }
+
+                var ext = p.TryGetProperty("file_ext", out var fe) ? fe.GetString() ?? "" : "";
+                if (!string.IsNullOrEmpty(ext) && !ext.StartsWith('.')) ext = "." + ext;
+                if (string.IsNullOrEmpty(ext))
+                {
+                    try { ext = Path.GetExtension(new Uri(url).AbsolutePath); }
+                    catch { }
+                }
+                if (string.IsNullOrEmpty(ext)) ext = ".jpg";
+
+                string id;
+                if (p.TryGetProperty("id", out var ii))
+                {
+                    id = ii.ValueKind switch
+                    {
+                        JsonValueKind.String => ii.GetString() ?? "",
+                        JsonValueKind.Number => ii.GetInt64().ToString(),
+                        _ => "",
+                    };
+                }
+                else id = "";
+                if (string.IsNullOrEmpty(id)) { rejectedNoId++; continue; }
+
+                int width  = TryGetInt32(p, "width");
+                int height = TryGetInt32(p, "height");
+                var res = width > 0 && height > 0 ? $"{width}x{height}" : "?";
+
+                list.Add(new Candidate(id, url, ext, width, height, res));
             }
-            if (string.IsNullOrEmpty(ext)) ext = ".jpg";
-
-            var id = p.TryGetProperty("id", out var ii) ? ii.GetInt64().ToString() : "";
-            if (string.IsNullOrEmpty(id)) continue;
-
-            int width  = p.TryGetProperty("width",  out var wd) ? wd.GetInt32() : 0;
-            int height = p.TryGetProperty("height", out var ht) ? ht.GetInt32() : 0;
-            var res = width > 0 && height > 0 ? $"{width}x{height}" : "?";
-
-            list.Add(new Candidate(id, url, ext, width, height, res));
+            catch (Exception ex)
+            {
+                rejectedException++;
+                Log?.Invoke($"[konachan.parse] per-item exception: {ex.GetType().Name}: {ex.Message}");
+            }
         }
+
+        Log?.Invoke($"[konachan.parse] raw={rawCount} kept={list.Count} " +
+                    $"rejected: noUrl={rejectedNoUrl} noId={rejectedNoId} exc={rejectedException}");
         return list;
+    }
+
+    private static int TryGetInt32(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var v)) return 0;
+        return v.ValueKind switch
+        {
+            JsonValueKind.Number => v.TryGetInt32(out var n) ? n : (int)v.GetDouble(),
+            JsonValueKind.String when int.TryParse(v.GetString(), out var n) => n,
+            _ => 0,
+        };
     }
 
     public Dictionary<string, object?>? TryParseUrlToPreset(Uri url)

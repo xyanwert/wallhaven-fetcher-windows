@@ -49,6 +49,8 @@ public sealed class TrayApp : ApplicationContext
         _presets         = new PresetEngine(_registry);
         _fitFolder       = new FitFolderEngine(AppendLog);
 
+        LogStartupDiagnostics(apiKey is not null);
+
         _menu = BuildMenu();
         _tray = new NotifyIcon
         {
@@ -262,6 +264,65 @@ public sealed class TrayApp : ApplicationContext
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────
+
+    private void LogStartupDiagnostics(bool hasApiKey)
+    {
+        try
+        {
+            var asm = System.Reflection.Assembly.GetEntryAssembly();
+            AppendLog("════════════════════════════════════════════════════════════");
+            AppendLog($"[BOOT] WallhavenFetcher starting");
+            AppendLog($"[BOOT] version: {asm?.GetName().Version}");
+            AppendLog($"[BOOT] OS: {Environment.OSVersion}  ({(Environment.Is64BitOperatingSystem ? "x64" : "x86")})");
+            AppendLog($"[BOOT] CLR: {Environment.Version}");
+            AppendLog($"[BOOT] cwd: {Environment.CurrentDirectory}");
+            AppendLog($"[BOOT] paths.config: {Paths.ConfigFile}  exists={File.Exists(Paths.ConfigFile)}");
+            AppendLog($"[BOOT] paths.state : {Paths.StateFile}   exists={File.Exists(Paths.StateFile)}");
+            AppendLog($"[BOOT] paths.apiKey: {Paths.ApiKeyFile}  exists={File.Exists(Paths.ApiKeyFile)}  loaded={hasApiKey}");
+            AppendLog($"[BOOT] paths.log   : {_logPath}");
+
+            var cfgFile = ConfigFile.Load(Paths.ConfigFile);
+            var cfg = cfgFile.MaterializeEffective();
+            AppendLog($"[BOOT] overrides: {cfgFile.Overrides.Count} key(s) — " +
+                      $"{string.Join(", ", cfgFile.Overrides.Keys.OrderBy(k => k))}");
+            AppendLog($"[BOOT] presets: {cfgFile.Presets.Count} — " +
+                      $"{string.Join(", ", cfgFile.Presets.Keys.OrderBy(k => k))}");
+            AppendLog($"[BOOT] effective.source={cfg.Source}  q={cfg.Q.Substring(0, Math.Min(60, cfg.Q.Length))}" +
+                      $"{(cfg.Q.Length > 60 ? "…" : "")}");
+            AppendLog($"[BOOT] effective.maxWallpapers={cfg.MaxWallpapers}  newPerRun={cfg.NewPerRun}  " +
+                      $"rolloutPct={cfg.RolloutPct}");
+            AppendLog($"[BOOT] effective.fitToRatio={cfg.FitToRatio}  target={cfg.TargetResolution}  " +
+                      $"frozen={cfg.Frozen}");
+
+            var state = State.Load(Paths.StateFile);
+            AppendLog($"[BOOT] state.schema={state.Schema}  saved={state.Saved.Count}  banned={state.Banned.Count}");
+            foreach (var src in new[] { "wallhaven", "konachan", "local" })
+            {
+                var ss = state.Of(src);
+                AppendLog($"[BOOT] state.{src}: images={ss.Images.Count}  cursor entries={ss.Cursor.Count}");
+            }
+
+            var folder = cfg.ResolveFolder();
+            AppendLog($"[BOOT] folder: {folder}  exists={Directory.Exists(folder)}");
+            if (Directory.Exists(folder))
+            {
+                int totalFiles = Directory.EnumerateFiles(folder).Count();
+                int managed = Directory.EnumerateFiles(folder)
+                    .Count(f => FileNameHelpers.IsManagedWallpaper(f));
+                AppendLog($"[BOOT] folder contents: {totalFiles} total file(s)  {managed} managed wallpaper(s)");
+            }
+
+            var (tw, th) = DisplayDetector.Resolve(cfg.TargetResolution);
+            AppendLog($"[BOOT] display target resolved: {tw}x{th}");
+
+            AppendLog($"[BOOT] sources registered: {string.Join(", ", _registry.Names)}");
+            AppendLog("════════════════════════════════════════════════════════════");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"[BOOT] diagnostics failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
 
     private void AppendLog(string message)
     {

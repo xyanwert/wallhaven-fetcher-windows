@@ -28,15 +28,35 @@ public sealed class SyncEngine
                                             bool force = false,
                                             CancellationToken ct = default)
     {
+        _log("─── SYNC START ───");
+        _log($"[SYNC] config: source={cfg.Source}  q={cfg.Q.Substring(0, Math.Min(60, cfg.Q.Length))}" +
+             $"{(cfg.Q.Length > 60 ? "…" : "")}");
+        _log($"[SYNC] config: categories={cfg.Categories}  purity={cfg.Purity}  " +
+             $"sorting={cfg.Sorting}  order={cfg.Order}");
+        _log($"[SYNC] config: atleast={cfg.Atleast}  ratios={cfg.Ratios}  topRange={cfg.TopRange}");
+        _log($"[SYNC] config: maxWallpapers={cfg.MaxWallpapers}  newPerRun={cfg.NewPerRun}  " +
+             $"rolloutPct={cfg.RolloutPct}");
+        _log($"[SYNC] config: fitToRatio={cfg.FitToRatio}  target={cfg.TargetResolution}  " +
+             $"fitTol={cfg.FitTolerancePct}  cropThr={cfg.CropThresholdPct}");
+        _log($"[SYNC] force={force}  frozen={cfg.Frozen}");
+
         if (cfg.Frozen && !force)
         {
-            _log("Sync is frozen — skipping (this run is automatic; use 'Sync now' to override)");
+            _log("[SYNC] frozen — skipping (this run is automatic; use 'Sync now' to override)");
+            _log("─── SYNC END (frozen no-op) ───");
             return new SyncResult(0, 0, "frozen");
         }
 
         var src = _registry.Get(cfg.Source);
+        _log($"[SYNC] resolved source: {src.GetType().Name} (name={src.Name})");
+
+        // Inject parse-diagnostic logger if the source supports it.
+        if (src is WallhavenSource ws)  ws.Log = _log;
+        if (src is KonachanSource  ks)  ks.Log = _log;
+
         var folder = cfg.ResolveFolder();
         Directory.CreateDirectory(folder);
+        _log($"[SYNC] folder: {folder}");
 
         var fp = Fingerprint.Compute(cfg, src.Name, src.FingerprintKeys);
         var srcState = state.Of(src.Name);
@@ -147,32 +167,67 @@ public sealed class SyncEngine
         var (tw, th) = DisplayDetector.Resolve(cfg.TargetResolution);
         var fitter = new ImageFitter(tw, th, cfg.FitTolerancePct, cfg.CropThresholdPct);
 
-        int downloaded = 0;
-        foreach (var c in newCandidates)
+        int downloaded = 0, failed = 0, fitOk = 0, fitErr = 0;
+        for (int i = 0; i < newCandidates.Count; i++)
         {
+            var c = newCandidates[i];
             ct.ThrowIfCancellationRequested();
             var cid = new CanonicalId(src.Name, c.Id);
             var dest = Path.Combine(folder, cid.FileName(c.Ext));
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                _log($"Downloading {c.Id} ({c.Resolution}) → {Path.GetFileName(dest)}");
-                await DownloadAsync(c.Url, dest, ct);
+                _log($"[DL {i + 1}/{newCandidates.Count}] {c.Id} ({c.Resolution}) " +
+                     $"→ {Path.GetFileName(dest)}");
+                var bytes = await DownloadAsync(c.Url, dest, ct);
+                sw.Stop();
+                _log($"[DL {i + 1}/{newCandidates.Count}] OK  size={bytes:N0}B  in {sw.ElapsedMilliseconds}ms");
+
                 srcState.Images[c.Id] = fp;
                 downloaded++;
 
                 if (cfg.FitToRatio)
                 {
-                    var (modified, reason) = await fitter.FitInPlaceAsync(dest, ct);
-                    if (modified) _log($"  ↳ fit to target ratio: {reason}");
+                    var fitSw = System.Diagnostics.Stopwatch.StartNew();
+                    try
+                    {
+                        var (modified, reason) = await fitter.FitInPlaceAsync(dest, ct);
+                        fitSw.Stop();
+                        if (modified)
+                        {
+                            _log($"[FIT {i + 1}/{newCandidates.Count}] modified: {reason} " +
+                                 $"in {fitSw.ElapsedMilliseconds}ms");
+                            fitOk++;
+                        }
+                        else
+                        {
+                            _log($"[FIT {i + 1}/{newCandidates.Count}] no-op: {reason}");
+                        }
+                    }
+                    catch (Exception fitEx)
+                    {
+                        fitSw.Stop();
+                        _log($"[FIT {i + 1}/{newCandidates.Count}] EXCEPTION after " +
+                             $"{fitSw.ElapsedMilliseconds}ms — {fitEx.GetType().Name}: {fitEx.Message}");
+                        _log($"[FIT]   stack: {fitEx.StackTrace}");
+                        fitErr++;
+                    }
                 }
             }
             catch (Exception ex)
             {
-                _log($"Failed to download {c.Id}: {ex.Message}");
+                sw.Stop();
+                failed++;
+                _log($"[DL {i + 1}/{newCandidates.Count}] FAILED after {sw.ElapsedMilliseconds}ms — " +
+                     $"{ex.GetType().Name}: {ex.Message}");
+                if (ex.InnerException is not null)
+                    _log($"[DL]   inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+                _log($"[DL]   stack: {ex.StackTrace}");
             }
         }
 
-        _log($"Downloaded {downloaded}/{newCandidates.Count} wallpapers");
+        _log($"[SYNC] downloaded={downloaded}  failed={failed}  fitOk={fitOk}  fitErr={fitErr}  " +
+             $"(of {newCandidates.Count} candidates)");
 
         // Final cap: keep at most max_wallpapers non-saved files (across sources)
         EnforceCap(folder, state, cfg);
@@ -231,56 +286,104 @@ public sealed class SyncEngine
         ISource src, Config cfg, HashSet<string> haveCids, int need, int startPage,
         CancellationToken ct)
     {
+        _log($"[FETCH] start  source={src.Name}  need={need}  startPage={startPage}  " +
+             $"haveCids={haveCids.Count} (dedup set)");
+
         var collected = new List<Candidate>();
         var seen = new HashSet<string>(haveCids, StringComparer.OrdinalIgnoreCase);
         int page = startPage;
         const int maxPages = 20;
         bool exhausted = false;
+        int totalRaw = 0, totalDup = 0;
 
         while (collected.Count < need && page < startPage + maxPages)
         {
             string url = src.BuildUrl(cfg, page);
-            _log($"Querying: {Redact(url)}");
+            _log($"[FETCH] page {page}: querying {Redact(url)}");
 
             string body;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 body = await _http.GetStringAsync(url, ct);
+                sw.Stop();
+                _log($"[FETCH] page {page}: HTTP 200, {body.Length} bytes in {sw.ElapsedMilliseconds}ms");
             }
             catch (HttpRequestException ex)
             {
-                _log($"HTTP error on page {page}: {ex.Message}");
+                sw.Stop();
+                _log($"[FETCH] page {page}: HTTP ERROR after {sw.ElapsedMilliseconds}ms — " +
+                     $"{ex.GetType().Name}: {ex.Message}");
+                if (ex.InnerException is not null)
+                    _log($"[FETCH]   inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+                break;
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                _log($"[FETCH] page {page}: UNEXPECTED after {sw.ElapsedMilliseconds}ms — " +
+                     $"{ex.GetType().Name}: {ex.Message}");
+                _log($"[FETCH]   stack: {ex.StackTrace}");
                 break;
             }
 
-            var batch = src.ParseResponse(body);
+            IReadOnlyList<Candidate> batch;
+            try
+            {
+                batch = src.ParseResponse(body);
+            }
+            catch (Exception ex)
+            {
+                _log($"[FETCH] page {page}: PARSE FAILED — {ex.GetType().Name}: {ex.Message}");
+                _log($"[FETCH]   body preview: {body.Substring(0, Math.Min(200, body.Length))}");
+                break;
+            }
+
+            totalRaw += batch.Count;
+
             if (batch.Count == 0)
             {
-                _log($"Page {page} empty — wrapping cursor to 1");
+                _log($"[FETCH] page {page}: parser returned 0 candidates — assuming exhausted, " +
+                     "wrapping cursor to 1");
                 exhausted = true;
                 break;
             }
 
+            int pageNew = 0, pageDup = 0;
             foreach (var c in batch)
             {
                 var cid = new CanonicalId(src.Name, c.Id).ToString();
-                if (!seen.Contains(cid))
+                if (seen.Contains(cid))
                 {
-                    collected.Add(c);
-                    seen.Add(cid);
-                    if (collected.Count >= need) break;
+                    pageDup++;
+                    continue;
                 }
+                collected.Add(c);
+                seen.Add(cid);
+                pageNew++;
+                if (collected.Count >= need) break;
             }
+            totalDup += pageDup;
+
+            _log($"[FETCH] page {page}: parsed {batch.Count}  new={pageNew}  dedup={pageDup}  " +
+                 $"collected so far: {collected.Count}/{need}");
+
+            if (collected.Count >= need) break;
             page++;
         }
+
+        _log($"[FETCH] done  collected={collected.Count}  walked {page - startPage + 1} page(s)  " +
+             $"totalRaw={totalRaw}  totalDedup={totalDup}  exhausted={exhausted}");
         return (collected, exhausted ? 1 : page);
     }
 
-    private async Task DownloadAsync(string url, string dest, CancellationToken ct)
+    private async Task<long> DownloadAsync(string url, string dest, CancellationToken ct)
     {
         await using var stream = await _http.GetStreamAsync(url, ct);
         await using var file = File.Create(dest);
         await stream.CopyToAsync(file, ct);
+        try { return new FileInfo(dest).Length; }
+        catch { return -1; }
     }
 
     private void EnforceCap(string folder, State state, Config cfg)

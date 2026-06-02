@@ -37,39 +37,81 @@ public sealed class WallhavenSource : ISource
         return $"{ApiBase}?{qs}";
     }
 
+    /// <summary>Logger for parse diagnostics — set by SyncEngine before calling ParseResponse.</summary>
+    public Action<string>? Log { get; set; }
+
     public IReadOnlyList<Candidate> ParseResponse(string jsonBody)
     {
         using var doc = JsonDocument.Parse(jsonBody);
         if (!doc.RootElement.TryGetProperty("data", out var data) ||
             data.ValueKind != JsonValueKind.Array)
         {
+            Log?.Invoke("[wallhaven.parse] no 'data' array in response — " +
+                        $"root kind: {doc.RootElement.ValueKind}");
             return Array.Empty<Candidate>();
         }
 
-        var list = new List<Candidate>(data.GetArrayLength());
+        int rawCount = data.GetArrayLength();
+        var list = new List<Candidate>(rawCount);
+        int rejectedNoPath = 0, rejectedNoId = 0, rejectedException = 0;
+
         foreach (var w in data.EnumerateArray())
         {
-            var url = w.TryGetProperty("path", out var pp) ? pp.GetString() ?? "" : "";
-            if (string.IsNullOrEmpty(url)) continue;
-
-            string ext = "";
             try
             {
-                var u = new Uri(url);
-                ext = Path.GetExtension(u.AbsolutePath);
+                var url = w.TryGetProperty("path", out var pp) ? pp.GetString() ?? "" : "";
+                if (string.IsNullOrEmpty(url)) { rejectedNoPath++; continue; }
+
+                string ext = "";
+                try
+                {
+                    var u = new Uri(url);
+                    ext = Path.GetExtension(u.AbsolutePath);
+                }
+                catch (Exception) { }
+                if (string.IsNullOrEmpty(ext)) ext = ".jpg";
+
+                int width  = TryGetInt32(w, "dimension_x");
+                int height = TryGetInt32(w, "dimension_y");
+                var res    = w.TryGetProperty("resolution",  out var rr) ? rr.GetString() ?? "?" : "?";
+
+                // Wallhaven returns id as a string; tolerate numeric just in case.
+                string id;
+                if (w.TryGetProperty("id", out var ii))
+                {
+                    id = ii.ValueKind switch
+                    {
+                        JsonValueKind.String => ii.GetString() ?? "",
+                        JsonValueKind.Number => ii.GetInt64().ToString(),
+                        _ => "",
+                    };
+                }
+                else id = "";
+                if (string.IsNullOrEmpty(id)) { rejectedNoId++; continue; }
+
+                list.Add(new Candidate(id, url, ext, width, height, res));
             }
-            catch (Exception) { }
-            if (string.IsNullOrEmpty(ext)) ext = ".jpg";
-
-            int width  = w.TryGetProperty("dimension_x", out var dx) ? dx.GetInt32() : 0;
-            int height = w.TryGetProperty("dimension_y", out var dy) ? dy.GetInt32() : 0;
-            var res    = w.TryGetProperty("resolution",  out var rr) ? rr.GetString() ?? "?" : "?";
-            var id     = w.TryGetProperty("id",          out var ii) ? ii.GetString() ?? "" : "";
-
-            if (string.IsNullOrEmpty(id)) continue;
-            list.Add(new Candidate(id, url, ext, width, height, res));
+            catch (Exception ex)
+            {
+                rejectedException++;
+                Log?.Invoke($"[wallhaven.parse] per-item exception: {ex.GetType().Name}: {ex.Message}");
+            }
         }
+
+        Log?.Invoke($"[wallhaven.parse] raw={rawCount} kept={list.Count} " +
+                    $"rejected: noPath={rejectedNoPath} noId={rejectedNoId} exc={rejectedException}");
         return list;
+    }
+
+    private static int TryGetInt32(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var v)) return 0;
+        return v.ValueKind switch
+        {
+            JsonValueKind.Number => v.TryGetInt32(out var n) ? n : (int)v.GetDouble(),
+            JsonValueKind.String when int.TryParse(v.GetString(), out var n) => n,
+            _ => 0,
+        };
     }
 
     public Dictionary<string, object?>? TryParseUrlToPreset(Uri url)
