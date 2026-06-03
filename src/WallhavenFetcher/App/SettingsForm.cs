@@ -265,15 +265,17 @@ public sealed class SettingsForm : Form
         };
         var impFile   = new Button { Text = "Import file(s)…",      AutoSize = true };
         var impFolder = new Button { Text = "Import folder…",        AutoSize = true };
+        var impUrl    = new Button { Text = "Import URL(s)…",        AutoSize = true };
         var openFold  = new Button { Text = "Open wallpaper folder", AutoSize = true };
         var openFav   = new Button { Text = "Open favorites/",       AutoSize = true };
         var openLog   = new Button { Text = "Open log",              AutoSize = true };
         impFile.Click   += async (_, _) => await ImportFilesAsync();
         impFolder.Click += async (_, _) => await ImportFolderAsync();
+        impUrl.Click    += async (_, _) => await ImportUrlAsync();
         openFold.Click  += (_, _) => OpenFolder("");
         openFav.Click   += (_, _) => OpenFolder("favorites");
         openLog.Click   += (_, _) => OpenLog();
-        actions.Controls.AddRange(new Control[] { impFile, impFolder, openFold, openFav, openLog });
+        actions.Controls.AddRange(new Control[] { impFile, impFolder, impUrl, openFold, openFav, openLog });
         root.Controls.Add(actions, 0, 0);
         root.SetColumnSpan(actions, 2);
 
@@ -705,6 +707,24 @@ public sealed class SettingsForm : Form
         if (dlg.ShowDialog() != DialogResult.OK) return;
         if (string.IsNullOrEmpty(dlg.SelectedPath)) return;
         await DoImportAsync(new[] { dlg.SelectedPath });
+    }
+
+    /// <summary>
+    /// Prompt for one-or-more direct image URLs (one per line). Wallhaven /
+    /// konachan CDN URLs are recognized so they save under their canonical
+    /// source ID instead of becoming generic local-hash entries.
+    /// </summary>
+    private async Task ImportUrlAsync()
+    {
+        using var dlg = new UrlImportForm();
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        var urls = dlg.Urls;
+        if (urls.Count == 0)
+        {
+            _notify("Wallhaven Fetcher", "No valid http(s) URL provided.");
+            return;
+        }
+        await DoImportAsync(urls);
     }
 
     private async Task DoImportAsync(IEnumerable<string> paths)

@@ -46,7 +46,7 @@ public sealed class TrayApp : ApplicationContext
         _updater         = new UpdateChecker(_http);
         _updateInstaller = new UpdateInstaller(_http);
         _saveBan         = new SaveBanEngine(AppendLog);
-        _importer        = new ImportEngine(AppendLog);
+        _importer        = new ImportEngine(AppendLog, _http);
         _presets         = new PresetEngine(_registry);
         _fitFolder       = new FitFolderEngine(AppendLog);
 
