@@ -45,6 +45,12 @@ public sealed class Config
     public string TargetResolution { get; set; } = "";  // empty = auto-detect display
     public int FitTolerancePct { get; set; } = 12;
     public int CropThresholdPct { get; set; } = 10;
+    /// <summary>
+    /// Cap every image so neither dimension exceeds monitor's matching
+    /// dim × this factor. 2.0 gives Retina-class sharpness while keeping
+    /// file sizes sane. 1.0 = exact monitor size. 0 = disabled.
+    /// </summary>
+    public double MaxImageDimFactor { get; set; } = 2.0;
 
     // When true, the periodic sync timer no-ops. Explicit "Sync now" still
     // runs (it calls RunAsync(force: true) — see TrayApp.SyncNow).

@@ -105,7 +105,8 @@ public sealed class ImportEngine
         // Fitter is shared across URL + file phases.
         var (tw, th) = DisplayDetector.Resolve(cfg.TargetResolution);
         var fitter = cfg.FitToRatio
-            ? new ImageFitter(tw, th, cfg.FitTolerancePct, cfg.CropThresholdPct)
+            ? new ImageFitter(tw, th, cfg.FitTolerancePct, cfg.CropThresholdPct,
+                                     cfg.MaxImageDimFactor)
             : null;
 
         // ── URL download phase ────────────────────────────────────────

@@ -165,7 +165,8 @@ public sealed class SyncEngine
 
         // Display target for fitting
         var (tw, th) = DisplayDetector.Resolve(cfg.TargetResolution);
-        var fitter = new ImageFitter(tw, th, cfg.FitTolerancePct, cfg.CropThresholdPct);
+        var fitter = new ImageFitter(tw, th, cfg.FitTolerancePct, cfg.CropThresholdPct,
+                                     cfg.MaxImageDimFactor);
 
         int downloaded = 0, failed = 0, fitOk = 0, fitErr = 0;
         for (int i = 0; i < newCandidates.Count; i++)

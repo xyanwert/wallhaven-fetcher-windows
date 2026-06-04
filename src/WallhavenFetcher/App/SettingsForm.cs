@@ -40,6 +40,7 @@ public sealed class SettingsForm : Form
     private readonly TextBox       _targetResolution = new();
     private readonly NumericUpDown _fitTolerancePct  = new();
     private readonly NumericUpDown _cropThresholdPct = new();
+    private readonly NumericUpDown _maxImageDimFactor = new();
 
     // Presets tab
     private readonly ListBox _presetList = new();
@@ -171,7 +172,7 @@ public sealed class SettingsForm : Form
     private TabPage BuildFitTab()
     {
         var tab = new TabPage("Image fit");
-        var t = NewGrid(5, 2);
+        var t = NewGrid(7, 2);
 
         _fitToRatio.Text = "Auto-fit downloads to display ratio";
         _fitToRatio.AutoSize = true;
@@ -196,9 +197,17 @@ public sealed class SettingsForm : Form
         AddRow(t, 4, "Crop threshold %:",  _cropThresholdPct, 0, 100,
                hint: "prefer crop over pad if loss ≤ this");
 
+        // Cap every image to monitor_dim × this factor. NumericUpDown
+        // supports decimals via DecimalPlaces; 2.0 = up to 2× monitor on
+        // each axis (Retina margin), 1.0 = exact monitor size, 0 = disabled.
+        _maxImageDimFactor.DecimalPlaces = 1;
+        _maxImageDimFactor.Increment     = 0.5m;
+        AddRow(t, 5, "Max size × monitor:", _maxImageDimFactor, 0, 8,
+               hint: "0 disables; 1.0 = exact monitor; 2.0 = Retina margin");
+
         var fitNow = new Button { Text = "Fit existing wallpapers now", AutoSize = true };
         fitNow.Click += async (_, _) => await FitExistingAsync();
-        t.Controls.Add(fitNow, 0, 5);
+        t.Controls.Add(fitNow, 0, 6);
         t.SetColumnSpan(fitNow, 2);
 
         tab.Controls.Add(t);
@@ -491,6 +500,9 @@ public sealed class SettingsForm : Form
         _targetResolution.Text   = cfg.TargetResolution;
         _fitTolerancePct.Value   = Math.Clamp(cfg.FitTolerancePct, 0, 100);
         _cropThresholdPct.Value  = Math.Clamp(cfg.CropThresholdPct, 0, 100);
+        _maxImageDimFactor.Value = Math.Clamp((decimal)cfg.MaxImageDimFactor,
+                                              _maxImageDimFactor.Minimum,
+                                              _maxImageDimFactor.Maximum);
 
         RefreshPresetsList();
         RefreshLibrary();
@@ -539,6 +551,8 @@ public sealed class SettingsForm : Form
         Set("targetResolution", _targetResolution.Text);
         SetInt("fitTolerancePct",  (int)_fitTolerancePct.Value);
         SetInt("cropThresholdPct", (int)_cropThresholdPct.Value);
+        _cfgFile.Overrides["maxImageDimFactor"] =
+            JsonSerializer.SerializeToElement((double)_maxImageDimFactor.Value);
 
         _cfgFile.Save(Paths.ConfigFile);
         DialogResult = DialogResult.OK;

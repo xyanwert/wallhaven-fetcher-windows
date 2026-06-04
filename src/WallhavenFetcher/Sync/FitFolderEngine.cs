@@ -26,7 +26,8 @@ public sealed class FitFolderEngine
 
         var (tw, th) = DisplayDetector.Resolve(cfg.TargetResolution);
         result.TargetResolution = $"{tw}x{th}";
-        var fitter = new ImageFitter(tw, th, cfg.FitTolerancePct, cfg.CropThresholdPct);
+        var fitter = new ImageFitter(tw, th, cfg.FitTolerancePct, cfg.CropThresholdPct,
+                                     cfg.MaxImageDimFactor);
 
         var folder = cfg.ResolveFolder();
         var dirs = new[] { folder, FavoritesManager.FavoritesDir(folder) };
