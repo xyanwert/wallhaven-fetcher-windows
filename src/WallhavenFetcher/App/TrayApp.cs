@@ -111,6 +111,7 @@ public sealed class TrayApp : ApplicationContext
         m.Items.Add("♥  Save current wallpaper",  null, (_, _) => SaveCurrent());
         m.Items.Add("🗑  Ban current wallpaper",  null, (_, _) => BanCurrent());
         m.Items.Add("🔄  Sync now",               null, (_, _) => RunSyncAsync(force: true));
+        m.Items.Add("🔗  Import URL…",            null, async (_, _) => await ImportUrlFromTrayAsync());
         m.Items.Add("✨  Fix existing wallpapers", null, (_, _) => FitFolderInBackground());
         m.Items.Add(new ToolStripSeparator());
 
@@ -229,6 +230,39 @@ public sealed class TrayApp : ApplicationContext
         {
             _notifier.Show("Wallhaven Fetcher", "Settings saved. Syncing…");
             RunSyncAsync();
+        }
+    }
+
+    /// <summary>
+    /// Tray entry point for "Import URL…". Pops the same modal the Settings
+    /// Library tab uses, then runs the import on the threadpool and shows a
+    /// summary toast — no Settings round-trip required.
+    /// </summary>
+    private async Task ImportUrlFromTrayAsync()
+    {
+        using var dlg = new UrlImportForm();
+        if (dlg.ShowDialog() != DialogResult.OK) return;
+        var urls = dlg.Urls;
+        if (urls.Count == 0)
+        {
+            _notifier.Show("Wallhaven Fetcher", "No valid http(s) URL provided.");
+            return;
+        }
+        try
+        {
+            var state  = State.Load(Paths.StateFile);
+            var cfg    = ConfigFile.Load(Paths.ConfigFile).MaterializeEffective();
+            var result = await _importer.ImportAsync(urls, state, cfg);
+            if (result.NoneFound)
+                _notifier.Show("Wallhaven Fetcher", "No importable URLs found.");
+            else
+                _notifier.Show("Wallhaven Fetcher — Imported",
+                    $"{result.Imported.Count} new, {result.AlreadyImported.Count} already in collection.");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"Tray URL import failed: {ex}");
+            _notifier.Show("Wallhaven Fetcher — Import failed", ex.Message);
         }
     }
 
