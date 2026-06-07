@@ -51,6 +51,17 @@ public sealed class WallhavenSource : ISource
             return Array.Empty<Candidate>();
         }
 
+        // Surface API meta so we can tell at a glance whether 0 candidates
+        // means "upstream is genuinely empty" vs "parser dropped everything".
+        if (doc.RootElement.TryGetProperty("meta", out var meta) &&
+            meta.ValueKind == JsonValueKind.Object)
+        {
+            int total    = TryGetInt32(meta, "total");
+            int lastPage = TryGetInt32(meta, "last_page");
+            int curPage  = TryGetInt32(meta, "current_page");
+            Log?.Invoke($"[wallhaven.meta] total={total}  current_page={curPage}  last_page={lastPage}");
+        }
+
         int rawCount = data.GetArrayLength();
         var list = new List<Candidate>(rawCount);
         int rejectedNoPath = 0, rejectedNoId = 0, rejectedException = 0;
@@ -134,6 +145,45 @@ public sealed class WallhavenSource : ISource
         CopyIf("topRange");
         CopyIf("atleast");
         CopyIf("ratios");
+
+        // sorting inference — handles three real-world URL shapes the
+        // user can paste that don't carry an explicit &sorting= param:
+        //   1. shorthand:  ?sort=random         (sort= as alias for sorting=)
+        //   2. path-based: /random, /toplist, /latest, /hot
+        //   3. plain search: /search?q=memes    (wallhaven UI defaults to relevance)
+        // Without this, partial URLs silently inherit Config defaults
+        // (sorting=toplist + topRange=1M), which strangles niche queries
+        // down to ~1 result on the API even when the browser shows hundreds.
+        if (!preset.ContainsKey("sorting"))
+        {
+            var sortAlias = qs["sort"];
+            if (!string.IsNullOrEmpty(sortAlias))
+            {
+                preset["sorting"] = sortAlias;
+            }
+            else
+            {
+                var path = (url.AbsolutePath ?? "").Trim('/').ToLowerInvariant();
+                var pathSort = path switch
+                {
+                    "random"  => "random",
+                    "toplist" => "toplist",
+                    "latest"  => "date_added",
+                    "hot"     => "hot",
+                    _         => null,
+                };
+                if (pathSort is not null)
+                {
+                    preset["sorting"] = pathSort;
+                }
+                else if (preset.ContainsKey("q"))
+                {
+                    // Search with no explicit sort → match what wallhaven's
+                    // own /search UI does: sort by relevance, not toplist.
+                    preset["sorting"] = "relevance";
+                }
+            }
+        }
 
         // &rollout=N (0-100) → rollout_pct extension
         var rollout = qs["rollout"];
